@@ -1,0 +1,6 @@
+sources:
+  - name: incremental
+    database: frisbie_sandbox
+    schema: sandbox
+    tables:
+      - name: orders_pii

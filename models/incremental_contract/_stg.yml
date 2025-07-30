@@ -1,0 +1,29 @@
+
+version: 2
+
+models:
+    - name: incremental_raw
+      config:
+        contract:
+          enforced: true
+      description: raw incremental data
+      columns:
+          - name: custKey
+            description: primary key (number default precision)
+            tests:
+              - unique
+              - not_null
+          - name: orderDate
+            description: date of order (date default)
+            tests:
+              - not_null
+          - name: orderStatus
+            description: status of order (varchar(100))
+            data_type: varchar(100)
+            tests:
+              - not_null
+          - name: price
+            description: order price (NUMBER(6, 2))
+            data_type: number(6, 2)
+            tests:
+              - not_null
