@@ -1,0 +1,26 @@
+
+version: 2
+
+models:
+    - name: stg_orders_pii
+      description: orders for all customers with customer names
+      columns:
+          - name: order_id
+            description: Primary key for orders table
+            tests:
+              - unique
+              - not_null
+          - name: amount
+            description: Order amount
+            tests:
+              - not_null
+          - name: customer_id
+            description: Customer key for order
+            tests:
+              - not_null
+          - name: cust_first_name
+            description: Customer first name
+          - name: cust_last_name
+            description: Customer last name (initial)
+          - name: cust_full_name
+            description: Customer full name
