@@ -1,6 +1,6 @@
-sources:
-  - name: incremental
-    database: frisbie_sandbox
-    schema: sandbox
-    tables:
-      - name: incremental_raw
+# sources:
+#   - name: incremental
+#     database: frisbie_sandbox
+#     schema: sandbox
+#     tables:
+#       - name: incremental_raw
