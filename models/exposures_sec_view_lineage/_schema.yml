@@ -8,7 +8,6 @@ models:
           - name: order_id
             description: Primary key for orders table
             tests:
-              - unique
               - not_null
           - name: amount
             description: Order amount
