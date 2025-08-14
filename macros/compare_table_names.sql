@@ -7,31 +7,38 @@
 --      - 'source' - identifies missing models that are listed in the table
 --      - 'model' - identifies existing models that are missing in the table
   
-  {# Collect dbt model names from the project graph #}
-  {% set model_name_set = [] %}
-  {% for node in graph.nodes.values() %}
-    {% if node.resource_type == 'model' %}
-      {% if include_disabled or node.config.enabled %}
-        {% if not only_this_project or node.package_name == project_name %}
-          {% if case_sensitive %}
-            {% set nm = node.name %}
-          {% else %}
-            {% set nm = node.name | lower %}
+  {# Get model names via a run_query to ensure graph is available #}
+  {% set model_query %}
+    {% set model_name_set = [] %}
+    {% if execute %}
+      {% for node in graph.nodes.values() %}
+        {% if node.resource_type == 'model' %}
+          {% if include_disabled or node.config.enabled %}
+            {% if not only_this_project or node.package_name == project_name %}
+              {% if case_sensitive %}
+                {% set nm = node.name %}
+              {% else %}
+                {% set nm = node.name | lower %}
+              {% endif %}
+              {% do model_name_set.append(nm) %}
+            {% endif %}
           {% endif %}
-          {% do model_name_set.append(nm) %}
         {% endif %}
-      {% endif %}
+      {% endfor %}
     {% endif %}
-  {% endfor %}
-
-  {% set model_unique = model_name_set | unique | list %}
-
-  {# Prepare VALUES list for model names #}
-  {% set quoted_models = [] %}
-  {% for nm in model_unique %}
-    {% set val = "'" ~ (nm | replace("'", "''")) ~ "'" %}
-    {% do quoted_models.append(val) %}
-  {% endfor %}
+    {% set model_unique = model_name_set | unique | list %}
+    
+    {% if model_unique | length > 0 %}
+      {% set values_list = [] %}
+      {% for nm in model_unique %}
+        {% do values_list.append("('" ~ (nm | replace("'", "''")) ~ "')") %}
+      {% endfor %}
+      select column1 as name 
+      from values {{ values_list | join(',') }}
+    {% else %}
+      select null::varchar as name where false
+    {% endif %}
+  {% endset %}
 
   {% set quoted_column = adapter.quote(column_name) %}
   {% if case_sensitive %}
@@ -40,18 +47,11 @@
     {% set source_select = 'select distinct lower(' ~ quoted_column ~ ') as name from ' ~ adapter.quote(database) ~ '.' ~ adapter.quote(schema) ~ '.' ~ adapter.quote(table_name) %}
   {% endif %}
 
-  {% if quoted_models | length > 0 %}
-    {% set model_values_sql = 'select name from (values ' ~ ('(' ~ (quoted_models | join('),(')) ~ ')') ~ ') as m(name)' %}
-  {% else %}
-    {# produce an empty set #}
-    {% set model_values_sql = 'select name from (select null as name) where 1=0' %}
-  {% endif %}
-
   with source_vals as (
     {{ source_select }}
   ),
   model_vals as (
-    {{ model_values_sql }}
+    {{ model_query }}
   ),
   all_mismatches as (
     {% if direction in ('source', 'both') %}
