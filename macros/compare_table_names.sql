@@ -1,43 +1,12 @@
-{% macro compare_table_names_to_models(database, schema, table_name, column_name, only_this_project=True, include_disabled=False, case_sensitive=False) %}
---call with "dbt run-operation compare_table_names_to_models --args '{database: "FRISBIE_DEVELOPMENT", schema: "SANDBOX", table_name: "SNOW_SV_LIST", column_name: "SNOW_SV_NAME", case_sensitive: false}'"
-
-  {# Resolve the relation in the target warehouse #}
-  {% set relation = adapter.get_relation(database=database, schema=schema, identifier=table_name) %}
-  {% if relation is none %}
-    {{ exceptions.raise_compiler_error("Relation " ~ database ~ "." ~ schema ~ "." ~ table_name ~ " not found.") }}
-  {% endif %}
-
-  {% set quoted_column = adapter.quote(column_name) %}
-  {% set sql %}
-    select distinct {{ quoted_column }} as table_name
-    from {{ relation }}
-  {% endset %}
-
-  {% set results = run_query(sql) %}
-  {% if results is none %}
-    {{ log("No results returned. Are you running this with `dbt run-operation` or inside an on-run-* hook?", info=True) }}
-    {{ return(tojson({
-      "status": "no_results",
-      "database": database,
-      "schema": schema,
-      "table_name": table_name,
-      "column_name": column_name
-    })) }}
-  {% endif %}
-
-  {# Collect table names from the source table #}
-  {% set source_table_names = [] %}
-  {% for row in results.rows %}
-    {% if row[0] is not none %}
-      {% if case_sensitive %}
-        {% set value = row[0] | string %}
-      {% else %}
-        {% set value = (row[0] | string) | lower %}
-      {% endif %}
-      {% do source_table_names.append(value) %}
-    {% endif %}
-  {% endfor %}
-
+{% macro get_model_name_mismatches_sql(database, schema, table_name, column_name, only_this_project=True, include_disabled=False, case_sensitive=False, direction='both') %}
+--   This macro compares all dbt model names against a list of names in a db table
+--   Database, schema, table_name, column_name parameters point to the location of the table and column containing the list to compare against
+--   Only_this_project and include_disabled control scope of models compared (defaults True, False)
+--   Case sensitive (default False) compares names with oroginal cases if True
+--   Direction (default 'both') compares direction of comparison.  Options are:
+--      - 'source' - identifies missing models that are listed in the table
+--      - 'model' - identifies existing models that are missing in the table
+  
   {# Collect dbt model names from the project graph #}
   {% set model_name_set = [] %}
   {% for node in graph.nodes.values() %}
@@ -55,49 +24,51 @@
     {% endif %}
   {% endfor %}
 
-  {% set source_unique = source_table_names | unique | list %}
   {% set model_unique = model_name_set | unique | list %}
 
-  {% set in_source_not_in_models = [] %}
-  {% for name in source_unique %}
-    {% if name not in model_unique %}
-      {% do in_source_not_in_models.append(name) %}
-    {% endif %}
+  {# Prepare VALUES list for model names #}
+  {% set quoted_models = [] %}
+  {% for nm in model_unique %}
+    {% set val = "'" ~ (nm | replace("'", "''")) ~ "'" %}
+    {% do quoted_models.append(val) %}
   {% endfor %}
 
-  {% set in_models_not_in_source = [] %}
-  {% for name in model_unique %}
-    {% if name not in source_unique %}
-      {% do in_models_not_in_source.append(name) %}
+  {% set quoted_column = adapter.quote(column_name) %}
+  {% if case_sensitive %}
+    {% set source_select = 'select distinct ' ~ quoted_column ~ ' as name from ' ~ adapter.quote(database) ~ '.' ~ adapter.quote(schema) ~ '.' ~ adapter.quote(table_name) %}
+  {% else %}
+    {% set source_select = 'select distinct lower(' ~ quoted_column ~ ') as name from ' ~ adapter.quote(database) ~ '.' ~ adapter.quote(schema) ~ '.' ~ adapter.quote(table_name) %}
+  {% endif %}
+
+  {% if quoted_models | length > 0 %}
+    {% set model_values_sql = 'select name from (values ' ~ ('(' ~ (quoted_models | join('),(')) ~ ')') ~ ') as m(name)' %}
+  {% else %}
+    {# produce an empty set #}
+    {% set model_values_sql = 'select name from (select null as name) where 1=0' %}
+  {% endif %}
+
+  with source_vals as (
+    {{ source_select }}
+  ),
+  model_vals as (
+    {{ model_values_sql }}
+  ),
+  all_mismatches as (
+    {% if direction in ('source', 'both') %}
+    select 'in_source_not_in_models' as mismatch_type, s.name as name
+    from source_vals s
+    left join model_vals m on s.name = m.name
+    where m.name is null
     {% endif %}
-  {% endfor %}
-
-  {{ log("Count in source: " ~ (source_unique | length) ~ ", count in models: " ~ (model_unique | length), info=True) }}
-  {{ log("In source not in models: " ~ (in_source_not_in_models | length), info=True) }}
-  {{ log(in_source_not_in_models | join(", "), info=True) }}
-  {{ log("In models not in source: " ~ (in_models_not_in_source | length), info=True) }}
-  {{ log(in_models_not_in_source | join(", "), info=True) }}
-
-  {% set payload = {
-    "database": database,
-    "schema": schema,
-    "table_name": table_name,
-    "column_name": column_name,
-    "case_sensitive": case_sensitive,
-    "only_this_project": only_this_project,
-    "include_disabled": include_disabled,
-    "counts": {
-      "source": source_unique | length,
-      "models": model_unique | length,
-      "in_source_not_in_models": in_source_not_in_models | length,
-      "in_models_not_in_source": in_models_not_in_source | length
-    },
-    "in_source_not_in_models": in_source_not_in_models,
-    "in_models_not_in_source": in_models_not_in_source
-  } %}
-
-  {{ return(tojson(payload)) }}
-
+    {% if direction in ('model', 'both') %}
+    {% if direction == 'both' %}union all{% endif %}
+    select 'in_models_not_in_source' as mismatch_type, m.name as name
+    from model_vals m
+    left join source_vals s on s.name = m.name
+    where s.name is null
+    {% endif %}
+  )
+  select *
+  from all_mismatches
+  where 1=1  -- ensures valid SQL even if no direction matches
 {% endmacro %}
-
-
